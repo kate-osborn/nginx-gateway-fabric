@@ -248,7 +248,7 @@ describe('redirect', function () {
     {
       name: 'redirects to redirectPath if all conditions match',
       matches: testAllMatchTypes,
-      expectedPath: '/a-match',
+      expectedPath: '/a-match-1',
       requestModifier: (r) => {
         r.method = 'GET';
         r.headersIn = {
