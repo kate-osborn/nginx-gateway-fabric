@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - 'main'
+      - 'add-njs-to-workflow'
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
     paths-ignore:
@@ -68,6 +69,27 @@ jobs:
         uses: golangci/golangci-lint-action@v3.1.0
         with:
           args: --timeout ${{ env.GOLANGCI_TIMEOUT }}
+
+  njs-lint:
+    name: NJS Lint
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v2
+      - name: Run Prettier on NJS code
+        id: prettier-run
+        uses: rutajdash/prettier-cli-action@v1.0.0
+        with:
+          config_path: ${{ github.workspace }}/internal/nginx/modules/.prettierrc
+          file_pattern: ${{ github.workspace }}/internal/nginx/modules/*.js
+          prettier_version: 2.6.2
+      - name: Prettier Output
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          echo "The following files are not formatted:"
+          echo "${{steps.prettier-run.outputs.prettier_output}}"
+          echo "Run \"make njs-fmt\" locally to format the code"
 
   unit-tests:
     name: Unit Tests
