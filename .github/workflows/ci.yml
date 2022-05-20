@@ -122,7 +122,7 @@ jobs:
         with:
           node_version: 18
       - run: npm install mocha@^8.2 esm chai
-      - run: npx mocha -r esm njs-modules/httpmatches_test.js
+      - run: npx mocha -r esm ${{ github.workspace }}/internal/nginx/modules/httpmatches_test.js
 
   binary:
     name: Build Binary
