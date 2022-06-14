@@ -47,39 +47,41 @@ func generate(host state.Host, serviceStore state.ServiceStore) (server, Warning
 	locs := make([]location, 0, len(host.PathRouteGroups)) // FIXME(pleshakov): expand with g.Routes
 
 	for _, g := range host.PathRouteGroups {
-		// number of routes in a group is always at least 1
-		// otherwise, it is a bug in the state.Configuration code, so it is OK to panic here
-		r := g.Routes[0] // FIXME(pleshakov): for now, we only handle the first route in case there are multiple routes
-		address, err := getBackendAddress(r.Source.Spec.Rules[r.RuleIdx].BackendRefs, r.Source.Namespace, serviceStore)
-		if err != nil {
-			warnings.AddWarning(r.Source, err.Error())
+
+		matches := make([]httpMatch, 0, len(g.Routes))
+
+		for routeIdx, r := range g.Routes {
+			address, err := getBackendAddress(
+				r.Source.Spec.Rules[r.RuleIdx].BackendRefs,
+				r.Source.Namespace,
+				serviceStore,
+			)
+
+			if err != nil {
+				warnings.AddWarning(r.Source, err.Error())
+			}
+
+			path := createPathForMatch(g.Path, routeIdx)
+
+			locs = append(locs, generateMatchLocation(path, address))
+			matches = append(matches, createHTTPMatch(r.GetMatch(), path))
+
 		}
 
-		match, exists := r.GetMatch()
-		if exists && matchLocationNeeded(match) {
-			// FIXME(kate-osborn): route index is hardcoded to 0 for now.
-			// Once we support multiple routes we will need to change this to the index of the current route.
-			path := createPathForMatch(g.Path, 0)
-			// generate location block for this rule and match
-			mLoc := generateMatchLocation(path, address)
-			// generate the http_matches variable value
-			b, err := json.Marshal(createHTTPMatch(match, path))
+		if len(matches) > 0 {
+			b, err := json.Marshal(matches)
+
 			if err != nil {
 				// panic is safe here because we should never fail to marshal the match unless we constructed it incorrectly.
 				panic(fmt.Errorf("could not marshal http match: %w", err))
 			}
 
-			loc := location{
+			pathLoc := location{
 				Path:         g.Path,
 				HTTPMatchVar: string(b),
 			}
-			locs = append(locs, loc, mLoc)
-		} else {
-			loc := location{
-				Path:      g.Path,
-				ProxyPass: generateProxyPass(address),
-			}
-			locs = append(locs, loc)
+
+			locs = append(locs, pathLoc)
 		}
 	}
 
@@ -146,6 +148,8 @@ func createPathForMatch(path string, routeIdx int) string {
 // The NJS httpmatches module will lookup this variable on the request object and compare the request against the Method, Headers, and QueryParams contained in httpMatch.
 // If the request satisfies the httpMatch, the request will be internally redirected to the location RedirectPath by NGINX.
 type httpMatch struct {
+	// Any represents a match with no match conditions.
+	Any bool `json:"any,omitempty"`
 	// Method is the HTTPMethod of the HTTPRouteMatch.
 	Method v1alpha2.HTTPMethod `json:"method,omitempty"`
 	// Headers is a list of HTTPHeaders name value pairs with the format "{name}:{value}".
@@ -161,6 +165,11 @@ func createHTTPMatch(match v1alpha2.HTTPRouteMatch, redirectPath string) httpMat
 		RedirectPath: redirectPath,
 	}
 
+	if isPathOnlyMatch(match) {
+		hm.Any = true
+		return hm
+	}
+
 	if match.Method != nil {
 		hm.Method = *match.Method
 	}
@@ -168,7 +177,7 @@ func createHTTPMatch(match v1alpha2.HTTPRouteMatch, redirectPath string) httpMat
 	if match.Headers != nil {
 		headers := make([]string, 0, len(match.Headers))
 
-		//FIXME(kate-osborn): For now we only support type "Exact".
+		// FIXME(kate-osborn): For now we only support type "Exact".
 		for _, h := range match.Headers {
 			if *h.Type == v1alpha2.HeaderMatchExact {
 				headers = append(headers, createHeaderKeyValString(h))
@@ -180,7 +189,7 @@ func createHTTPMatch(match v1alpha2.HTTPRouteMatch, redirectPath string) httpMat
 	if match.QueryParams != nil {
 		params := make([]string, 0, len(match.QueryParams))
 
-		//FIXME(kate-osborn): For now we only support type "Exact".
+		// FIXME(kate-osborn): For now we only support type "Exact".
 		for _, p := range match.QueryParams {
 			if *p.Type == v1alpha2.QueryParamMatchExact {
 				params = append(params, createQueryParamKeyValString(p))
@@ -205,7 +214,6 @@ func createHeaderKeyValString(h v1alpha2.HTTPHeaderMatch) string {
 	return string(h.Name) + ":" + h.Value
 }
 
-// A match location is needed if the match specifies at least one of the following: Method, Headers, or QueryParams.
-func matchLocationNeeded(match v1alpha2.HTTPRouteMatch) bool {
-	return match.Method != nil || match.Headers != nil || match.QueryParams != nil
+func isPathOnlyMatch(match v1alpha2.HTTPRouteMatch) bool {
+	return match.Method == nil && match.Headers == nil && match.QueryParams == nil
 }

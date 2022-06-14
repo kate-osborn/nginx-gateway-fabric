@@ -41,7 +41,13 @@ var _ = Describe("Configuration", func() {
 						},
 						Rules: []v1alpha2.HTTPRouteRule{
 							{
-								// mo matches -> "/"
+								Matches: []v1alpha2.HTTPRouteMatch{
+									{
+										Path: &v1alpha2.HTTPPathMatch{
+											Value: helpers.GetStringPointer("/"), // default match
+										},
+									},
+								},
 							},
 							{
 								Matches: []v1alpha2.HTTPRouteMatch{
@@ -74,7 +80,7 @@ var _ = Describe("Configuration", func() {
 									Path: "/",
 									Routes: []state.Route{
 										{
-											MatchIdx: -1,
+											MatchIdx: 0,
 											RuleIdx:  0,
 											Source:   hr,
 										},
@@ -144,7 +150,7 @@ var _ = Describe("Configuration", func() {
 									Path: "/",
 									Routes: []state.Route{
 										{
-											MatchIdx: -1,
+											MatchIdx: 0,
 											RuleIdx:  0,
 											Source:   updatedHRWithIncrementedGen,
 										},
@@ -208,7 +214,7 @@ var _ = Describe("Configuration", func() {
 									Path: "/",
 									Routes: []state.Route{
 										{
-											MatchIdx: -1,
+											MatchIdx: 0,
 											RuleIdx:  0,
 											Source:   updatedHRWithIncrementedGen,
 										},
@@ -256,7 +262,13 @@ var _ = Describe("Configuration", func() {
 						},
 						Rules: []v1alpha2.HTTPRouteRule{
 							{
-								// mo matches -> "/"
+								Matches: []v1alpha2.HTTPRouteMatch{
+									{
+										Path: &v1alpha2.HTTPPathMatch{
+											Value: helpers.GetStringPointer("/"),
+										},
+									},
+								},
 							},
 						},
 					},
@@ -301,7 +313,7 @@ var _ = Describe("Configuration", func() {
 									Path: "/",
 									Routes: []state.Route{
 										{
-											MatchIdx: -1,
+											MatchIdx: 0,
 											RuleIdx:  0,
 											Source:   hr1,
 										},
@@ -355,7 +367,7 @@ var _ = Describe("Configuration", func() {
 									Path: "/",
 									Routes: []state.Route{
 										{
-											MatchIdx: -1,
+											MatchIdx: 0,
 											RuleIdx:  0,
 											Source:   hr1,
 										},
@@ -444,7 +456,7 @@ var _ = Describe("Configuration", func() {
 									Path: "/",
 									Routes: []state.Route{
 										{
-											MatchIdx: -1,
+											MatchIdx: 0,
 											RuleIdx:  0,
 											Source:   hr1,
 										},
@@ -533,7 +545,7 @@ var _ = Describe("Configuration", func() {
 									Path: "/",
 									Routes: []state.Route{
 										{
-											MatchIdx: -1,
+											MatchIdx: 0,
 											RuleIdx:  0,
 											Source:   hr1,
 										},
@@ -587,7 +599,7 @@ var _ = Describe("Configuration", func() {
 									Path: "/",
 									Routes: []state.Route{
 										{
-											MatchIdx: -1,
+											MatchIdx: 0,
 											RuleIdx:  0,
 											Source:   hr1,
 										},
@@ -623,7 +635,13 @@ var _ = Describe("Configuration", func() {
 						},
 						Rules: []v1alpha2.HTTPRouteRule{
 							{
-								// mo matches -> "/"
+								Matches: []v1alpha2.HTTPRouteMatch{
+									{
+										Path: &v1alpha2.HTTPPathMatch{
+											Value: helpers.GetStringPointer("/"), // default match
+										},
+									},
+								},
 							},
 						},
 					},
@@ -669,7 +687,7 @@ var _ = Describe("Configuration", func() {
 									Path: "/",
 									Routes: []state.Route{
 										{
-											MatchIdx: -1,
+											MatchIdx: 0,
 											RuleIdx:  0,
 											Source:   hr1,
 										},
@@ -723,7 +741,7 @@ var _ = Describe("Configuration", func() {
 									Path: "/",
 									Routes: []state.Route{
 										{
-											MatchIdx: -1,
+											MatchIdx: 0,
 											RuleIdx:  0,
 											Source:   hr1,
 										},
@@ -812,7 +830,7 @@ var _ = Describe("Configuration", func() {
 											Source:   hr2,
 										},
 										{
-											MatchIdx: -1,
+											MatchIdx: 0,
 											RuleIdx:  0,
 											Source:   hr1Updated,
 										},
@@ -922,48 +940,29 @@ func TestRouteGetMatch(t *testing.T) {
 	tests := []struct {
 		name,
 		expPath string
-		route       state.Route
-		matchExists bool
+		route state.Route
 	}{
 		{
-			name:        "match does not exist",
-			expPath:     "",
-			route:       state.Route{MatchIdx: -1},
-			matchExists: false,
+			name:    "first match in first rule",
+			expPath: "/path-1",
+			route:   state.Route{MatchIdx: 0, RuleIdx: 0, Source: hr},
 		},
 		{
-			name:        "first match in first rule",
-			expPath:     "/path-1",
-			route:       state.Route{MatchIdx: 0, RuleIdx: 0, Source: hr},
-			matchExists: true,
+			name:    "second match in first rule",
+			expPath: "/path-2",
+			route:   state.Route{MatchIdx: 1, RuleIdx: 0, Source: hr},
 		},
 		{
-			name:        "second match in first rule",
-			expPath:     "/path-2",
-			route:       state.Route{MatchIdx: 1, RuleIdx: 0, Source: hr},
-			matchExists: true,
-		},
-		{
-			name:        "second match in second rule",
-			expPath:     "/path-4",
-			route:       state.Route{MatchIdx: 1, RuleIdx: 1, Source: hr},
-			matchExists: true,
+			name:    "second match in second rule",
+			expPath: "/path-4",
+			route:   state.Route{MatchIdx: 1, RuleIdx: 1, Source: hr},
 		},
 	}
 
 	for _, tc := range tests {
-		actual, exists := tc.route.GetMatch()
-		if !tc.matchExists {
-			if exists {
-				t.Errorf("route.GetMatch() incorrectly returned true (match exists) for test case: %q", tc.name)
-			}
-		} else {
-			if !exists {
-				t.Errorf("route.GetMatch() incorrectly returned false (match does not exist) for test case: %q", tc.name)
-			}
-			if *actual.Path.Value != tc.expPath {
-				t.Errorf("route.GetMatch() returned incorrect match with path: %s, expected path: %s for test case: %q", *actual.Path.Value, tc.expPath, tc.name)
-			}
+		actual := tc.route.GetMatch()
+		if *actual.Path.Value != tc.expPath {
+			t.Errorf("route.GetMatch() returned incorrect match with path: %s, expected path: %s for test case: %q", *actual.Path.Value, tc.expPath, tc.name)
 		}
 	}
 }

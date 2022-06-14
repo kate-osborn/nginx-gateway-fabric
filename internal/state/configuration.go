@@ -111,10 +111,11 @@ func (prs pathRoutesGroups) Keys() []string {
 	return keys
 }
 
-// Route represents a Route, which corresponds to a Match in the HTTPRouteRule. If a rule doesn't define any matches,
-// it is assumed that the rule is for "/" path.
+// Route represents a Route, which corresponds to a Match in the HTTPRouteRule.
+// An HTTPRoute is guaranteed to have at least one rule with one match.
+// If no rule or match is specified by the user, the default rule {{path:{ type: "PathPrefix", value: "/"}}} is set by the schema.
 type Route struct {
-	// MatchIdx is the index of the rule in the Rule.Matches or -1 if there are no matches.
+	// MatchIdx is the index of the rule in the Rule.Matches.
 	MatchIdx int
 	// RuleIdx is the index of the corresponding rule in the HTTPRoute.
 	RuleIdx int
@@ -124,16 +125,17 @@ type Route struct {
 
 // String returns a printable representation of a Route.
 func (r *Route) String() string {
-	return fmt.Sprintf("Route: Source: %s, RuleIdx: %d, MatchIdx: %d", getResourceKey(&r.Source.ObjectMeta), r.RuleIdx, r.MatchIdx)
+	return fmt.Sprintf(
+		"Route: Source: %s, RuleIdx: %d, MatchIdx: %d",
+		getResourceKey(&r.Source.ObjectMeta),
+		r.RuleIdx,
+		r.MatchIdx,
+	)
 }
 
-// GetMatch returns the HTTPRouteMatch of the Route and true if it exists.
-// If there is no Match defined on the Route, GetMatch returns an empty HTTPRouteMatch and false.
-func (r *Route) GetMatch() (v1alpha2.HTTPRouteMatch, bool) {
-	if r.MatchIdx == -1 {
-		return v1alpha2.HTTPRouteMatch{}, false
-	}
-	return r.Source.Spec.Rules[r.RuleIdx].Matches[r.MatchIdx], true
+// GetMatch returns the HTTPRouteMatch of the Route.
+func (r *Route) GetMatch() v1alpha2.HTTPRouteMatch {
+	return r.Source.Spec.Rules[r.RuleIdx].Matches[r.MatchIdx]
 }
 
 // Operation defines an operation to be performed for a Host.
@@ -407,43 +409,28 @@ func buildPathRoutesGroupsForHosts(httpRoutes httpRoutes) map[string]pathRoutesG
 			for i := range hr.Spec.Rules {
 				rule := &hr.Spec.Rules[i]
 
-				if len(rule.Matches) == 0 {
-					group, exist := groups["/"]
+				for j, m := range rule.Matches {
+					path := "/"
+					if m.Path != nil && m.Path.Value != nil && *m.Path.Value != "/" {
+						path = *m.Path.Value
+					}
+
+					group, exist := groups[path]
 					if !exist {
 						group = PathRouteGroup{
-							Path: "/",
+							Path: path,
 						}
 					}
 
-					group.Routes = append(group.Routes, Route{
-						MatchIdx: -1,
-						RuleIdx:  i,
-						Source:   hr,
-					})
-
-					groups["/"] = group
-				} else {
-					for j, m := range rule.Matches {
-						path := "/"
-						if m.Path != nil && m.Path.Value != nil && *m.Path.Value != "/" {
-							path = *m.Path.Value
-						}
-
-						group, exist := groups[path]
-						if !exist {
-							group = PathRouteGroup{
-								Path: path,
-							}
-						}
-
-						group.Routes = append(group.Routes, Route{
+					group.Routes = append(
+						group.Routes, Route{
 							MatchIdx: j,
 							RuleIdx:  i,
 							Source:   hr,
-						})
+						},
+					)
 
-						groups[path] = group
-					}
+					groups[path] = group
 				}
 			}
 		}
@@ -467,7 +454,10 @@ func arePathRoutesEqual(pathRoutes1, pathRoutes2 []PathRouteGroup) bool {
 		}
 
 		for j := 0; j < len(pathRoutes1[i].Routes); j++ {
-			if !compareObjectMetas(&pathRoutes1[i].Routes[j].Source.ObjectMeta, &pathRoutes2[i].Routes[j].Source.ObjectMeta) {
+			if !compareObjectMetas(
+				&pathRoutes1[i].Routes[j].Source.ObjectMeta,
+				&pathRoutes2[i].Routes[j].Source.ObjectMeta,
+			) {
 				return false
 			}
 
