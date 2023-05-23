@@ -91,6 +91,7 @@ Before beginning development, please familiarize yourself with the following doc
   procedures. This document explains how to write and run unit tests, and how to manually verify changes.
 - [Pull Request Guidelines](docs/developer/pull-request.md): A guide for both PR submitters and reviewers, outlining
   guidelines and best practices to ensure smooth and efficient PR processes.
+- [Code Style Guides](docs/developer/code-style-guides.md): 
 
 ## Style Guides
 
