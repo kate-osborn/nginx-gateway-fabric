@@ -27,9 +27,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/gateway-api/apis/v1alpha2"
 	"sigs.k8s.io/gateway-api/apis/v1beta1"
+	"sigs.k8s.io/gateway-api/conformance/apis/v1alpha1"
 	"sigs.k8s.io/gateway-api/conformance/tests"
 	"sigs.k8s.io/gateway-api/conformance/utils/flags"
 	"sigs.k8s.io/gateway-api/conformance/utils/suite"
+	"sigs.k8s.io/yaml"
 )
 
 func TestConformance(t *testing.T) {
@@ -43,7 +45,7 @@ func TestConformance(t *testing.T) {
 	g.Expect(v1alpha2.AddToScheme(client.Scheme())).To(Succeed())
 	g.Expect(v1beta1.AddToScheme(client.Scheme())).To(Succeed())
 
-	supportedFeatures := parseSupportedFeatures(*flags.SupportedFeatures)
+	supportedFeatures := suite.ParseSupportedFeatures(*flags.SupportedFeatures)
 	exemptFeatures := parseSupportedFeatures(*flags.ExemptFeatures)
 
 	t.Logf(`Running conformance tests with %s GatewayClass\n cleanup: %t\n`+
@@ -51,17 +53,41 @@ func TestConformance(t *testing.T) {
 		*flags.GatewayClassName, *flags.CleanupBaseResources, *flags.ShowDebug,
 		*flags.EnableAllSupportedFeatures, *flags.SupportedFeatures, *flags.ExemptFeatures)
 
-	cSuite := suite.New(suite.Options{
-		Client:                     client,
-		GatewayClassName:           *flags.GatewayClassName,
-		Debug:                      *flags.ShowDebug,
-		CleanupBaseResources:       *flags.CleanupBaseResources,
-		SupportedFeatures:          supportedFeatures,
-		ExemptFeatures:             exemptFeatures,
-		EnableAllSupportedFeatures: *flags.EnableAllSupportedFeatures,
+	expSuite, err := suite.NewExperimentalConformanceTestSuite(suite.ExperimentalConformanceOptions{
+		Options: suite.Options{
+			Client:                     client,
+			GatewayClassName:           *flags.GatewayClassName,
+			Debug:                      *flags.ShowDebug,
+			CleanupBaseResources:       *flags.CleanupBaseResources,
+			SupportedFeatures:          supportedFeatures,
+			ExemptFeatures:             exemptFeatures,
+			EnableAllSupportedFeatures: *flags.EnableAllSupportedFeatures,
+		},
+		Implementation: v1alpha1.Implementation{
+			Organization: "nginxinc",
+			Project:      "nginx-kubernetes-gateway",
+			URL:          "https://github.com/nginxinc/nginx-kubernetes-gateway",
+			Version:      "v0.5.0",
+			Contact: []string{
+				"@nginxinc/kubernetes-gateway",
+			},
+		},
+		ConformanceProfiles: sets.New(suite.HTTPConformanceProfileName),
 	})
-	cSuite.Setup(t)
-	cSuite.Run(t, tests.ConformanceTests)
+	g.Expect(err).To(Not(HaveOccurred()))
+
+	expSuite.Setup(t)
+
+	err = expSuite.Run(t, tests.ConformanceTests)
+	g.Expect(err).To(Not(HaveOccurred()))
+
+	report, err := expSuite.Report()
+	g.Expect(err).To(Not(HaveOccurred()))
+
+	yamlReport, err := yaml.Marshal(report)
+	g.Expect(err).ToNot(HaveOccurred())
+
+	t.Logf("Conformance Profile: \n%s\n", string(yamlReport))
 }
 
 // parseSupportedFeatures parses flag arguments and converts the string to

@@ -2,6 +2,7 @@ NKG_TAG = 0.5.0
 NKG_PREFIX = nginx-kubernetes-gateway
 GATEWAY_CLASS = nginx
 SUPPORTED_FEATURES = HTTPRoute,HTTPRouteQueryParamMatching,HTTPRouteMethodMatching,HTTPRoutePortRedirect,HTTPRouteSchemeRedirect,GatewayClassObservedGenerationBump
+CONFORMANCE_PROFILES = HTTP
 KIND_KUBE_CONFIG=$${HOME}/.kube/kind/config
 TAG = latest
 PREFIX = conformance-test-runner
@@ -73,8 +74,8 @@ run-conformance-tests: ## Run conformance tests
 	kubectl run -i conformance \
 		--image=$(PREFIX):$(TAG) --image-pull-policy=Never \
 		--overrides='{ "spec": { "serviceAccountName": "conformance" }  }' \
-		--restart=Never -- go test -v . -tags conformance -args --gateway-class=$(GATEWAY_CLASS) --debug \
-						        --supported-features=$(SUPPORTED_FEATURES)
+		--restart=Never -- go test -v . -tags conformance,experimental -args --gateway-class=$(GATEWAY_CLASS) --debug \
+						        --supported-features=$(SUPPORTED_FEATURES) --conformance-profiles=$(CONFORMANCE_PROFILES)
 
 .PHONY: cleanup-conformance-tests
 cleanup-conformance-tests: ## Clean up conformance tests fixtures
