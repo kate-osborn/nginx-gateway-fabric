@@ -536,12 +536,12 @@ var _ = Describe("ChangeProcessor", func() {
 				})
 				When("Gateways don't exist", func() {
 					When("the first HTTPRoute is upserted", func() {
-						It("returns empty graph", func() {
+						It("returns nil graph", func() {
 							processor.CaptureUpsertChange(hr1)
 
 							changed, graphCfg := processor.Process()
-							Expect(changed).To(Equal(state.ClusterStateChange))
-							Expect(helpers.Diff(&graph.Graph{}, graphCfg)).To(BeEmpty())
+							Expect(changed).To(Equal(state.NoChange))
+							Expect(graphCfg).To(BeNil())
 							Expect(helpers.Diff(&graph.Graph{}, processor.GetLatestGraph())).To(BeEmpty())
 						})
 					})
@@ -978,7 +978,7 @@ var _ = Describe("ChangeProcessor", func() {
 				})
 			})
 			When("the first HTTPRoute is deleted", func() {
-				It("returns empty graph", func() {
+				It("returns nil graph", func() {
 					processor.CaptureDeleteChange(
 						&v1.HTTPRoute{},
 						types.NamespacedName{Namespace: "test", Name: "hr-1"},
@@ -988,8 +988,8 @@ var _ = Describe("ChangeProcessor", func() {
 					expGraph.ReferencedServices = nil
 
 					changed, graphCfg := processor.Process()
-					Expect(changed).To(Equal(state.ClusterStateChange))
-					Expect(helpers.Diff(&graph.Graph{}, graphCfg)).To(BeEmpty())
+					Expect(changed).To(Equal(state.NoChange))
+					Expect(graphCfg).To(BeNil())
 					Expect(helpers.Diff(&graph.Graph{}, processor.GetLatestGraph())).To(BeEmpty())
 				})
 			})
@@ -1469,16 +1469,19 @@ var _ = Describe("ChangeProcessor", func() {
 					Expect(changed).To(Equal(state.ClusterStateChange))
 				})
 			})
-			When("a namespace that is linked to a listener has its labels changed to no longer match a listener", func() {
-				It("triggers an update", func() {
-					nsDifferentLabels.Labels = map[string]string{
-						"oranges": "bananas",
-					}
-					processor.CaptureUpsertChange(nsDifferentLabels)
-					changed, _ := processor.Process()
-					Expect(changed).To(Equal(state.ClusterStateChange))
-				})
-			})
+			When(
+				"a namespace that is linked to a listener has its labels changed to no longer match a listener",
+				func() {
+					It("triggers an update", func() {
+						nsDifferentLabels.Labels = map[string]string{
+							"oranges": "bananas",
+						}
+						processor.CaptureUpsertChange(nsDifferentLabels)
+						changed, _ := processor.Process()
+						Expect(changed).To(Equal(state.ClusterStateChange))
+					})
+				},
+			)
 			When("a gateway changes its listener's labels", func() {
 				It("triggers an update when a namespace that matches the new labels is created", func() {
 					gwChangedLabel := gw.DeepCopy()
@@ -1889,8 +1892,6 @@ var _ = Describe("ChangeProcessor", func() {
 			When("resources are deleted followed by upserts with the same generations", func() {
 				It("should report changed", func() {
 					// these are changing changes
-					processor.CaptureDeleteChange(&v1.GatewayClass{}, gcNsName)
-					processor.CaptureDeleteChange(&v1.Gateway{}, gwNsName)
 					processor.CaptureDeleteChange(&v1.HTTPRoute{}, hrNsName)
 					processor.CaptureDeleteChange(&v1beta1.ReferenceGrant{}, rgNsName)
 					processor.CaptureDeleteChange(&v1alpha2.BackendTLSPolicy{}, btlsNsName)
@@ -1906,7 +1907,8 @@ var _ = Describe("ChangeProcessor", func() {
 				})
 			})
 			It("should report changed after deleting resources", func() {
-				processor.CaptureDeleteChange(&v1.HTTPRoute{}, hr2NsName)
+				processor.CaptureDeleteChange(&v1.GatewayClass{}, gcNsName)
+				processor.CaptureDeleteChange(&v1.Gateway{}, gwNsName)
 
 				changed, _ := processor.Process()
 				Expect(changed).To(Equal(state.ClusterStateChange))

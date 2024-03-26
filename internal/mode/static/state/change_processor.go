@@ -124,6 +124,14 @@ func NewChangeProcessorImpl(cfg ChangeProcessorConfig) *ChangeProcessorImpl {
 		return processor.latestGraph != nil && processor.latestGraph.IsReferenced(obj, nsname)
 	}
 
+	isGatewayAccepted := func(_ client.Object, _ types.NamespacedName) bool {
+		return processor.latestGraph != nil && processor.latestGraph.IsGatewayAccepted()
+	}
+
+	isOurs := func(obj client.Object, nsname types.NamespacedName) bool {
+		return processor.latestGraph != nil && processor.latestGraph.IsOurs(obj, nsname)
+	}
+
 	trackingUpdater := newChangeTrackingUpdater(
 		extractGVK,
 		[]changeTrackingUpdaterObjectTypeCfg{
@@ -140,12 +148,12 @@ func NewChangeProcessorImpl(cfg ChangeProcessorConfig) *ChangeProcessorImpl {
 			{
 				gvk:       extractGVK(&v1.HTTPRoute{}),
 				store:     newObjectStoreMapAdapter(clusterStore.HTTPRoutes),
-				predicate: nil,
+				predicate: funcPredicate{stateChanged: isOurs},
 			},
 			{
 				gvk:       extractGVK(&v1beta1.ReferenceGrant{}),
 				store:     newObjectStoreMapAdapter(clusterStore.ReferenceGrants),
-				predicate: nil,
+				predicate: funcPredicate{stateChanged: isGatewayAccepted},
 			},
 			{
 				gvk:       extractGVK(&v1alpha2.BackendTLSPolicy{}),

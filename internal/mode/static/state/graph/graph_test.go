@@ -732,3 +732,158 @@ func TestIsReferenced(t *testing.T) {
 		})
 	}
 }
+
+func TestGraph_IsGatewayAccepted(t *testing.T) {
+	tests := []struct {
+		graph    *Graph
+		name     string
+		expected bool
+	}{
+		{
+			name:     "accepted",
+			graph:    &Graph{Gateway: &Gateway{Valid: true}},
+			expected: true,
+		},
+		{
+			name:     "not accepted",
+			graph:    &Graph{Gateway: &Gateway{Valid: false}},
+			expected: false,
+		},
+		{
+			name:     "nil Gateway",
+			graph:    &Graph{Gateway: nil},
+			expected: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			g := NewWithT(t)
+			result := test.graph.IsGatewayAccepted()
+			g.Expect(result).To(Equal(test.expected))
+		})
+	}
+}
+
+func TestGraph_IsOurs(t *testing.T) {
+	graph := &Graph{
+		Gateway: &Gateway{
+			Source: &gatewayv1.Gateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "accepted-gw",
+					Namespace: "test",
+				},
+			},
+		},
+		Routes: map[types.NamespacedName]*Route{
+			{Name: "existing", Namespace: "test"}: {},
+		},
+		IgnoredGateways: map[types.NamespacedName]*gatewayv1.Gateway{
+			{Name: "ignored-gw", Namespace: "test"}:  {},
+			{Name: "ignored-gw2", Namespace: "test"}: {},
+			{Name: "ignored-gw3", Namespace: "test"}: {},
+		},
+	}
+
+	existingRoute := types.NamespacedName{Name: "existing", Namespace: "test"}
+	newRoute := types.NamespacedName{Name: "new", Namespace: "test"}
+
+	acceptedGwRef := gatewayv1.ParentReference{
+		Group:     helpers.GetPointer[gatewayv1.Group](gatewayv1.GroupName),
+		Namespace: helpers.GetPointer[gatewayv1.Namespace]("test"),
+		Name:      "accepted-gw",
+	}
+	notOurGwRef := gatewayv1.ParentReference{Name: "not-ours"}
+	ignoredGwRef := gatewayv1.ParentReference{Name: "ignored-gw"}
+
+	createRoute := func(refs ...gatewayv1.ParentReference) *gatewayv1.HTTPRoute {
+		return &gatewayv1.HTTPRoute{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: "test",
+			},
+			Spec: gatewayv1.HTTPRouteSpec{
+				CommonRouteSpec: gatewayv1.CommonRouteSpec{
+					ParentRefs: refs,
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		graph     *Graph
+		name      string
+		obj       client.Object
+		objNsname types.NamespacedName
+		expected  bool
+	}{
+		{
+			name:      "route exists in graph",
+			graph:     graph,
+			obj:       &gatewayv1.HTTPRoute{},
+			objNsname: existingRoute,
+			expected:  true,
+		},
+		{
+			name:      "route references the accepted Gateway - explicit group and namespace",
+			graph:     graph,
+			obj:       createRoute(notOurGwRef, acceptedGwRef),
+			objNsname: newRoute,
+			expected:  true,
+		},
+		{
+			name:      "route references ignored Gateway - implicit group and namespace",
+			graph:     graph,
+			obj:       createRoute(ignoredGwRef, notOurGwRef),
+			objNsname: newRoute,
+			expected:  true,
+		},
+		{
+			name:  "route does not reference any Gateway - wrong group",
+			graph: graph,
+			obj: createRoute(gatewayv1.ParentReference{
+				Group: helpers.GetPointer[gatewayv1.Group]("wrong-group"),
+				Name:  "not-a-gw",
+			}),
+			objNsname: newRoute,
+			expected:  false,
+		},
+		{
+			name:  "route does not reference accepted Gateway - wrong namespace",
+			graph: graph,
+			obj: createRoute(gatewayv1.ParentReference{
+				Namespace: helpers.GetPointer[gatewayv1.Namespace]("wrong-ns"),
+				Name:      "accepted-gw",
+			}),
+			objNsname: newRoute,
+			expected:  false,
+		},
+		{
+			name:      "route does not reference accepted Gateway - no matching gw",
+			graph:     graph,
+			obj:       createRoute(notOurGwRef),
+			objNsname: newRoute,
+			expected:  false,
+		},
+		{
+			name:      "no gateway in graph",
+			graph:     &Graph{Gateway: nil},
+			obj:       &gatewayv1.HTTPRoute{},
+			objNsname: existingRoute,
+			expected:  false,
+		},
+		{
+			name:     "unsupported object",
+			graph:    &Graph{Gateway: nil},
+			obj:      &v1.Namespace{},
+			expected: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			g := NewWithT(t)
+			result := test.graph.IsOurs(test.obj, test.objNsname)
+			g.Expect(result).To(Equal(test.expected))
+		})
+	}
+}

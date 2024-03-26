@@ -63,47 +63,6 @@ type Graph struct {
 // ProtectedPorts are the ports that may not be configured by a listener with a descriptive name of each port.
 type ProtectedPorts map[int32]string
 
-// IsReferenced returns true if the Graph references the resource.
-func (g *Graph) IsReferenced(resourceType client.Object, nsname types.NamespacedName) bool {
-	switch obj := resourceType.(type) {
-	case *v1.Secret:
-		_, exists := g.ReferencedSecrets[nsname]
-		return exists
-	case *v1.ConfigMap:
-		_, exists := g.ReferencedCaCertConfigMaps[nsname]
-		return exists
-	case *v1.Namespace:
-		// `existed` is needed as it checks the graph's ReferencedNamespaces which stores all the namespaces that
-		// match the Gateway listener's label selector when the graph was created. This covers the case when
-		// a Namespace changes its label so it no longer matches a Gateway listener's label selector, but because
-		// it was in the graph's ReferencedNamespaces we know that the Graph did reference the Namespace.
-		//
-		// However, if there is a Namespace which changes its label (previously it did not match) to match a Gateway
-		// listener's label selector, it will not be in the current graph's ReferencedNamespaces until it is rebuilt
-		// and thus not be caught in `existed`. Therefore, we need `exists` to check the graph's Gateway and see if the
-		// new Namespace actually matches any of the Gateway listener's label selector.
-		//
-		// `exists` does not cover the case highlighted above by `existed` and vice versa so both are needed.
-
-		_, existed := g.ReferencedNamespaces[nsname]
-		exists := isNamespaceReferenced(obj, g.Gateway)
-		return existed || exists
-	// Service reference exists if at least one HTTPRoute references it.
-	case *v1.Service:
-		_, exists := g.ReferencedServices[nsname]
-		return exists
-	// EndpointSlice reference exists if its Service owner is referenced by at least one HTTPRoute.
-	case *discoveryV1.EndpointSlice:
-		svcName := index.GetServiceNameFromEndpointSlice(obj)
-
-		// Service Namespace should be the same Namespace as the EndpointSlice
-		_, exists := g.ReferencedServices[types.NamespacedName{Namespace: nsname.Namespace, Name: svcName}]
-		return exists
-	default:
-		return false
-	}
-}
-
 // BuildGraph builds a Graph from a state.
 func BuildGraph(
 	state ClusterState,
@@ -157,4 +116,97 @@ func BuildGraph(
 	}
 
 	return g
+}
+
+// IsGatewayAccepted returns whether the winning Gateway is accepted by our controller.
+func (g *Graph) IsGatewayAccepted() bool {
+	if g.Gateway == nil {
+		return false
+	}
+
+	return g.Gateway.Valid
+}
+
+// IsOurs returns whether the resource is ours. In other words, does the resource reference our controller,
+// either directly or through another resource.
+func (g *Graph) IsOurs(resourceType client.Object, nsname types.NamespacedName) bool {
+	switch obj := resourceType.(type) {
+	case *gatewayv1.HTTPRoute:
+		if g.Gateway == nil {
+			return false
+		}
+
+		if _, exists := g.Routes[nsname]; exists {
+			return true
+		}
+
+		acceptedGw := client.ObjectKeyFromObject(g.Gateway.Source)
+
+		for _, ref := range obj.Spec.ParentRefs {
+
+			if ref.Group != nil && *ref.Group != gatewayv1.GroupName {
+				continue
+			}
+
+			gwNsName := types.NamespacedName{Namespace: obj.Namespace, Name: string(ref.Name)}
+			if ref.Namespace != nil {
+				gwNsName.Namespace = string(*ref.Namespace)
+			}
+
+			if gwNsName == acceptedGw {
+				return true
+			}
+
+			for nsname := range g.IgnoredGateways {
+				if gwNsName == nsname {
+					return true
+				}
+			}
+		}
+
+		return false
+	default:
+		return false
+	}
+}
+
+// IsReferenced returns true if the Graph references the resource.
+func (g *Graph) IsReferenced(resourceType client.Object, nsname types.NamespacedName) bool {
+	switch obj := resourceType.(type) {
+	case *v1.Secret:
+		_, exists := g.ReferencedSecrets[nsname]
+		return exists
+	case *v1.ConfigMap:
+		_, exists := g.ReferencedCaCertConfigMaps[nsname]
+		return exists
+	case *v1.Namespace:
+		// `existed` is needed as it checks the graph's ReferencedNamespaces which stores all the namespaces that
+		// match the Gateway listener's label selector when the graph was created. This covers the case when
+		// a Namespace changes its label so it no longer matches a Gateway listener's label selector, but because
+		// it was in the graph's ReferencedNamespaces we know that the Graph did reference the Namespace.
+		//
+		// However, if there is a Namespace which changes its label (previously it did not match) to match a Gateway
+		// listener's label selector, it will not be in the current graph's ReferencedNamespaces until it is rebuilt
+		// and thus not be caught in `existed`. Therefore, we need `exists` to check the graph's Gateway and see if the
+		// new Namespace actually matches any of the Gateway listener's label selector.
+		//
+		// `exists` does not cover the case highlighted above by `existed` and vice versa so both are needed.
+
+		_, existed := g.ReferencedNamespaces[nsname]
+		exists := isNamespaceReferenced(obj, g.Gateway)
+		return existed || exists
+	// Service reference exists if at least one HTTPRoute references it.
+	case *v1.Service:
+		_, exists := g.ReferencedServices[nsname]
+		return exists
+	// EndpointSlice reference exists if its Service owner is referenced by at least one HTTPRoute.
+	case *discoveryV1.EndpointSlice:
+		svcName := index.GetServiceNameFromEndpointSlice(obj)
+
+		// Service Namespace should be the same Namespace as the EndpointSlice
+		_, exists := g.ReferencedServices[types.NamespacedName{Namespace: nsname.Namespace, Name: svcName}]
+		return exists
+	default:
+		return false
+	}
 }
