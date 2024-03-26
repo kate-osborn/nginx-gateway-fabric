@@ -766,6 +766,9 @@ func TestGraph_IsGatewayAccepted(t *testing.T) {
 }
 
 func TestGraph_IsOurs(t *testing.T) {
+	existingRoute := types.NamespacedName{Name: "existing", Namespace: "test"}
+	newRoute := types.NamespacedName{Name: "new", Namespace: "test"}
+
 	graph := &Graph{
 		Gateway: &Gateway{
 			Source: &gatewayv1.Gateway{
@@ -776,7 +779,7 @@ func TestGraph_IsOurs(t *testing.T) {
 			},
 		},
 		Routes: map[types.NamespacedName]*Route{
-			{Name: "existing", Namespace: "test"}: {},
+			existingRoute: {},
 		},
 		IgnoredGateways: map[types.NamespacedName]*gatewayv1.Gateway{
 			{Name: "ignored-gw", Namespace: "test"}:  {},
@@ -784,9 +787,6 @@ func TestGraph_IsOurs(t *testing.T) {
 			{Name: "ignored-gw3", Namespace: "test"}: {},
 		},
 	}
-
-	existingRoute := types.NamespacedName{Name: "existing", Namespace: "test"}
-	newRoute := types.NamespacedName{Name: "new", Namespace: "test"}
 
 	acceptedGwRef := gatewayv1.ParentReference{
 		Group:     helpers.GetPointer[gatewayv1.Group](gatewayv1.GroupName),
