@@ -2,7 +2,9 @@ package clientsettings
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
+	"strings"
 	"text/template"
 
 	ngfAPI "github.com/nginxinc/nginx-gateway-fabric/apis/v1alpha1"
@@ -140,67 +142,49 @@ func (g Generator) GenerateForInternalLocation(
 	return policies.GenerateResult{Files: files}
 }
 
-func isDigit(char string) bool {
-	_, err := strconv.Atoi(char)
-	return err == nil
+func getMaxSize(s1 ngfAPI.Size, s2 *ngfAPI.Size) ngfAPI.Size {
+	s1Bytes, err := parseSizeToBytes(s1)
+	if err != nil {
+		panic(err)
+	}
+
+	s2Bytes, err := parseSizeToBytes(*s2)
+	if err != nil {
+		panic(err)
+	}
+
+	if s1Bytes > s2Bytes {
+		return s1
+	}
+
+	return *s2
 }
 
-// ^\d{1,4}(k|m|g)?$`
-func getMaxSize(s1 ngfAPI.Size, s2 *ngfAPI.Size) ngfAPI.Size {
-	if s2 == nil {
-		return s1
+// sizeMultipliers defines the conversion rates for each unit to bytes.
+var sizeMultipliers = map[string]int64{
+	"b": 1,                  // bytes
+	"k": 1024,               // kilobytes
+	"m": 1024 * 1024,        // megabytes
+	"g": 1024 * 1024 * 1024, // gigabytes
+}
+
+// parseSizeToBytes parses the size string and returns the size in bytes.
+func parseSizeToBytes(s ngfAPI.Size) (int64, error) {
+	re := regexp.MustCompile(`^(\d{1,4})(k|m|g)?$`)
+	matches := re.FindStringSubmatch(string(s))
+	if len(matches) < 3 {
+		return 0, fmt.Errorf("invalid size format, could not find submatches: %s", s)
 	}
 
-	if s1 == "" {
-		return *s2
+	value, err := strconv.ParseInt(matches[1], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid size format, could not parse int: %s", s)
 	}
 
-	s1Str := string(s1)
-	s2Str := string(*s2)
-
-	s1Unit := s1Str[len(s1Str)-1:]
-	s2Unit := s2Str[len(s2Str)-1:]
-
-	// if unit is missing then it's bytes
-	// bytes will always be smaller than other units
-	if isDigit(s1Unit) && !isDigit(s2Unit) {
-		return *s2
+	unit := strings.ToLower(matches[2])
+	if unit == "" {
+		unit = "b" // Default to bytes if no unit is specified
 	}
 
-	if !isDigit(s1Unit) && isDigit(s2Unit) {
-		return s1
-	}
-
-	if s1Unit == s2Unit {
-		s1Int, err := strconv.Atoi(s1Str[:len(s1Str)-1])
-		if err != nil {
-			panic(err)
-		}
-
-		s2Int, err := strconv.Atoi(s2Str[:len(s2Str)-1])
-		if err != nil {
-			panic(err)
-		}
-
-		if s1Int > s2Int {
-			return s1
-		}
-
-		return *s2
-	}
-
-	switch s1Unit {
-	case "k":
-		return *s2
-	case "m":
-		if s2Unit == "g" {
-			return *s2
-		}
-
-		return s1
-	case "g":
-		return s1
-	}
-
-	return s1
+	return value * sizeMultipliers[unit], nil
 }
