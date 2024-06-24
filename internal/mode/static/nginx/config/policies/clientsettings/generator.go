@@ -102,9 +102,18 @@ func (g Generator) GenerateForLocation(pols []policies.Policy, location http.Loc
 			continue
 		}
 
-		if csp.Spec.Body != nil {
-			maxBodySize = getMaxSize(maxBodySize, csp.Spec.Body.MaxSize)
+		// If the body size is not specified, we set the size to the default nginx size.
+		// Otherwise, if the max body size of all other internal location blocks is lower than the default, we will be
+		// enforcing a lower max body size for this internal location lock.
+		// TODO: this means we will have to update this size if the default ever changes.
+		// Should we add a way to track this?
+		var size ngfAPI.Size = "1m"
+
+		if csp.Spec.Body != nil && csp.Spec.Body.MaxSize != nil {
+			size = *csp.Spec.Body.MaxSize
 		}
+
+		maxBodySize = getMaxSize(maxBodySize, size)
 	}
 
 	if maxBodySize == "" {
@@ -142,13 +151,13 @@ func (g Generator) GenerateForInternalLocation(
 	return policies.GenerateResult{Files: files}
 }
 
-func getMaxSize(s1 ngfAPI.Size, s2 *ngfAPI.Size) ngfAPI.Size {
+func getMaxSize(s1 ngfAPI.Size, s2 ngfAPI.Size) ngfAPI.Size {
 	s1Bytes, err := parseSizeToBytes(s1)
 	if err != nil {
 		panic(err)
 	}
 
-	s2Bytes, err := parseSizeToBytes(*s2)
+	s2Bytes, err := parseSizeToBytes(s2)
 	if err != nil {
 		panic(err)
 	}
@@ -157,7 +166,7 @@ func getMaxSize(s1 ngfAPI.Size, s2 *ngfAPI.Size) ngfAPI.Size {
 		return s1
 	}
 
-	return *s2
+	return s2
 }
 
 // sizeMultipliers defines the conversion rates for each unit to bytes.
