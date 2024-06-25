@@ -21,7 +21,7 @@ import (
 type Policy struct {
 	// Source is the corresponding Policy resource.
 	Source policies.Policy
-	// Ancestors is list of ancestor objects of the Policy. Used in status.
+	// Ancestors is a list of ancestor objects of the Policy. Used in status.
 	Ancestors []PolicyAncestor
 	// TargetRefs are the resources that the Policy targets.
 	TargetRefs []PolicyTargetRef

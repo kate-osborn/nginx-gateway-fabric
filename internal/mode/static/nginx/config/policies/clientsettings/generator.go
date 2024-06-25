@@ -66,9 +66,16 @@ func (g Generator) GenerateForServer(pols []policies.Policy, _ http.Server) poli
 			continue
 		}
 
+		content := helpers.MustExecuteTemplate(tmpl, csp.Spec)
+		// TODO: this check doesn't work
+		// Find a way to eliminate empty files
+		if len(content) == 0 {
+			continue
+		}
+
 		files = append(files, policies.File{
 			Name:    fmt.Sprintf("ClientSettingsPolicy_%s_%s_server.conf", csp.Namespace, csp.Name),
-			Content: helpers.MustExecuteTemplate(tmpl, csp.Spec),
+			Content: content,
 		})
 	}
 
@@ -102,18 +109,9 @@ func (g Generator) GenerateForLocation(pols []policies.Policy, location http.Loc
 			continue
 		}
 
-		// If the body size is not specified, we set the size to the default nginx size.
-		// Otherwise, if the max body size of all other internal location blocks is lower than the default, we will be
-		// enforcing a lower max body size for this internal location lock.
-		// TODO: this means we will have to update this size if the default ever changes.
-		// Should we add a way to track this?
-		var size ngfAPI.Size = "1m"
-
 		if csp.Spec.Body != nil && csp.Spec.Body.MaxSize != nil {
-			size = *csp.Spec.Body.MaxSize
+			maxBodySize = getMaxSize(maxBodySize, *csp.Spec.Body.MaxSize)
 		}
-
-		maxBodySize = getMaxSize(maxBodySize, size)
 	}
 
 	if maxBodySize == "" {
@@ -152,6 +150,14 @@ func (g Generator) GenerateForInternalLocation(
 }
 
 func getMaxSize(s1 ngfAPI.Size, s2 ngfAPI.Size) ngfAPI.Size {
+	if s1 == "" {
+		return s2
+	}
+
+	if s2 == "" {
+		return s1
+	}
+
 	s1Bytes, err := parseSizeToBytes(s1)
 	if err != nil {
 		panic(err)

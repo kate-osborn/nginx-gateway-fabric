@@ -3,6 +3,7 @@ package dataplane
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"sort"
 
@@ -14,7 +15,7 @@ import (
 
 	ngfAPI "github.com/nginxinc/nginx-gateway-fabric/apis/v1alpha1"
 	"github.com/nginxinc/nginx-gateway-fabric/internal/framework/helpers"
-	policies2 "github.com/nginxinc/nginx-gateway-fabric/internal/mode/static/nginx/config/policies"
+	ngxPolicies "github.com/nginxinc/nginx-gateway-fabric/internal/mode/static/nginx/config/policies"
 	"github.com/nginxinc/nginx-gateway-fabric/internal/mode/static/nginx/config/policies/observability"
 	"github.com/nginxinc/nginx-gateway-fabric/internal/mode/static/state/graph"
 	"github.com/nginxinc/nginx-gateway-fabric/internal/mode/static/state/resolver"
@@ -204,6 +205,8 @@ func convertBackendTLS(btp *graph.BackendTLSPolicy) *VerifyTLS {
 }
 
 func buildServers(g *graph.Graph) (http, ssl []VirtualServer) {
+	pols := buildPolicies(g.Gateway.Policies)
+
 	rulesForProtocol := map[v1.ProtocolType]portPathRules{
 		v1.HTTPProtocolType:  make(portPathRules),
 		v1.HTTPSProtocolType: make(portPathRules),
@@ -213,7 +216,7 @@ func buildServers(g *graph.Graph) (http, ssl []VirtualServer) {
 		if l.Valid {
 			rules := rulesForProtocol[l.Source.Protocol][l.Source.Port]
 			if rules == nil {
-				rules = newHostPathRules()
+				rules = newHostPathRules(pols)
 				rulesForProtocol[l.Source.Protocol][l.Source.Port] = rules
 			}
 
@@ -225,8 +228,6 @@ func buildServers(g *graph.Graph) (http, ssl []VirtualServer) {
 	sslRules := rulesForProtocol[v1.HTTPSProtocolType]
 
 	httpServers, sslServers := httpRules.buildServers(), sslRules.buildServers()
-
-	pols := buildPolicies(g.Gateway.Policies)
 
 	for i := range httpServers {
 		httpServers[i].Policies = pols
@@ -265,16 +266,18 @@ type pathAndType struct {
 type hostPathRules struct {
 	rulesPerHost     map[string]map[pathAndType]PathRule
 	listenersForHost map[string]*graph.Listener
+	defaultPolices   []ngxPolicies.Policy
 	httpsListeners   []*graph.Listener
 	port             int32
 	listenersExist   bool
 }
 
-func newHostPathRules() *hostPathRules {
+func newHostPathRules(defaultPolicies []ngxPolicies.Policy) *hostPathRules {
 	return &hostPathRules{
 		rulesPerHost:     make(map[string]map[pathAndType]PathRule),
 		listenersForHost: make(map[string]*graph.Listener),
 		httpsListeners:   make([]*graph.Listener, 0),
+		defaultPolices:   defaultPolicies,
 	}
 }
 
@@ -345,7 +348,7 @@ func (hpr *hostPathRules) upsertRoute(
 			}
 		}
 
-		pols := buildPolicies(route.Policies)
+		pols := buildRoutePolicies(client.ObjectKeyFromObject(route.Source), hpr.defaultPolices, route.Policies)
 
 		for _, h := range hostnames {
 			for _, m := range rule.Matches {
@@ -671,8 +674,8 @@ func buildBaseHTTPConfig(g *graph.Graph) BaseHTTPConfig {
 
 func buildPolicies(
 	graphPolicies []*graph.Policy,
-) []policies2.Policy {
-	finalPolicies := make([]policies2.Policy, 0, len(graphPolicies))
+) []ngxPolicies.Policy {
+	finalPolicies := make([]ngxPolicies.Policy, 0, len(graphPolicies))
 
 	for _, policy := range graphPolicies {
 		if !policy.Valid {
@@ -683,4 +686,128 @@ func buildPolicies(
 	}
 
 	return finalPolicies
+}
+
+func buildRoutePolicies(
+	routeNsName types.NamespacedName,
+	serverPolicies []ngxPolicies.Policy,
+	graphPolicies []*graph.Policy,
+) []ngxPolicies.Policy {
+	validRoutePolicies := buildPolicies(graphPolicies)
+
+	// if there are no server policies, then return the valid route policies.
+	if serverPolicies == nil {
+		return validRoutePolicies
+	}
+
+	finalRoutePolicies := make([]ngxPolicies.Policy, 0, len(validRoutePolicies)+len(serverPolicies))
+	finalRoutePolicies = append(finalRoutePolicies, validRoutePolicies...)
+
+	// otherwise, find all the route client settings policies
+	routeClientSettingsPolicies := make([]ngxPolicies.Policy, 0, len(validRoutePolicies))
+	for _, policy := range validRoutePolicies {
+		if csp, ok := policy.(*ngfAPI.ClientSettingsPolicy); ok {
+			routeClientSettingsPolicies = append(routeClientSettingsPolicies, csp)
+		}
+	}
+
+	// and all the server client settings policies
+	serverClientSettingsPolicies := make([]ngxPolicies.Policy, 0, len(serverPolicies))
+	for _, policy := range serverPolicies {
+		if csp, ok := policy.(*ngfAPI.ClientSettingsPolicy); ok {
+			serverClientSettingsPolicies = append(serverClientSettingsPolicies, csp)
+		}
+	}
+
+	// if there are no route client settings policies
+	// return the server client settings policies and the valid route policies.
+	if routeClientSettingsPolicies == nil {
+		finalRoutePolicies = append(finalRoutePolicies, serverClientSettingsPolicies...)
+		return finalRoutePolicies
+	}
+
+	// otherwise, need to calculate the inherited client settings policy for the route.
+	// this is the set of fields that are set in the server policies and NOT set in the route policies.
+	// we will add this as a new policy to the route.
+	inheritedPolicy := createInheritedPolicyForRoute(routeNsName, serverClientSettingsPolicies, routeClientSettingsPolicies)
+	finalRoutePolicies = append(finalRoutePolicies, inheritedPolicy)
+
+	return finalRoutePolicies
+}
+
+func createInheritedPolicyForRoute(routeNsName types.NamespacedName, defaults, overrides []ngxPolicies.Policy) *ngfAPI.ClientSettingsPolicy {
+	inheritedPolicy := mergeCSPPolicies(defaults, overrides)
+	inheritedPolicy.Namespace = routeNsName.Namespace
+	inheritedPolicy.Name = routeNsName.Name + "_inherited"
+	return inheritedPolicy
+}
+
+// mergeCSPPolicies returns a single policy with all the non-nil fields in defaults that are nil in overrides.
+func mergeCSPPolicies(defaults, overrides []ngxPolicies.Policy) *ngfAPI.ClientSettingsPolicy {
+	merged := &ngfAPI.ClientSettingsPolicy{}
+
+	// Collect non-nil fields from defaults
+	for _, def := range defaults {
+		csp := helpers.MustCastObject[*ngfAPI.ClientSettingsPolicy](def)
+		addNonNilFields(&merged.Spec, &csp.Spec)
+	}
+
+	// Clear fields in merged based on non-nil fields in overrides
+	for _, over := range overrides {
+		csp := helpers.MustCastObject[*ngfAPI.ClientSettingsPolicy](over)
+		clearSpecFields(&merged.Spec, &csp.Spec)
+	}
+
+	return merged
+}
+
+func addNonNilFields(target, source *ngfAPI.ClientSettingsPolicySpec) {
+	if target == nil || source == nil {
+		return
+	}
+
+	sourceData, err := json.Marshal(source)
+	if err != nil {
+		panic(fmt.Sprintf("could not marshal client settings policy: %s", err.Error()))
+	}
+
+	// Unmarshal only non-nil fields into target
+	if err := json.Unmarshal(sourceData, target); err != nil {
+		panic(fmt.Sprintf("could not unmarshal client settings policy: %s", err.Error()))
+	}
+}
+
+// TODO: possible to do this with json? Could be generic, but not sure it would be easier.
+func clearSpecFields(target, source *ngfAPI.ClientSettingsPolicySpec) {
+	if target == nil || source == nil {
+		return
+	}
+
+	// Clear Body fields
+	if source.Body != nil {
+		if source.Body.MaxSize != nil {
+			target.Body.MaxSize = nil
+		}
+		if source.Body.Timeout != nil {
+			target.Body.Timeout = nil
+		}
+	}
+
+	// Clear KeepAlive fields
+	if source.KeepAlive != nil {
+		if source.KeepAlive.Requests != nil {
+			target.KeepAlive.Requests = nil
+		}
+		if source.KeepAlive.Time != nil {
+			target.KeepAlive.Time = nil
+		}
+		if source.KeepAlive.Timeout != nil {
+			if source.KeepAlive.Timeout.Server != nil {
+				target.KeepAlive.Timeout.Server = nil
+			}
+			if source.KeepAlive.Timeout.Header != nil {
+				target.KeepAlive.Timeout.Header = nil
+			}
+		}
+	}
 }
