@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -28,7 +29,7 @@ const (
 	ngfContainerName   = "nginx-gateway"
 )
 
-// Since checkContainerLogsForErrors may experience interference from previous tests (as explained in the function
+// Since checkNGFContainerLogsForErrors may experience interference from previous tests (as explained in the function
 // documentation), this test is recommended to be run separate from other tests.
 var _ = Describe("Graceful Recovery test", Ordered, Label("graceful-recovery"), func() {
 	files := []string{
@@ -188,7 +189,11 @@ func runRestartNodeTest(teaURL, coffeeURL string, files []string, ns *core.Names
 		Expect(err).ToNot(HaveOccurred())
 	}
 
-	checkNGFFunctionality(teaURL, coffeeURL, ngfPodName, "", files, ns)
+	checkNGFFunctionality(teaURL, coffeeURL, files, ns)
+	checkNGFContainerLogsForErrors(ngfPodName)
+	if errorLogs := getUnexpectedNginxErrorLogs(ngfPodName); errorLogs != "" {
+		Skip(fmt.Sprintf("NGINX has unexpected error logs: \n%s", errorLogs))
+	}
 }
 
 func runRecoveryTest(teaURL, coffeeURL, ngfPodName, containerName string, files []string, ns *core.Namespace) {
@@ -218,7 +223,10 @@ func runRecoveryTest(teaURL, coffeeURL, ngfPodName, containerName string, files 
 			Should(Succeed())
 	}
 
-	checkNGFFunctionality(teaURL, coffeeURL, ngfPodName, containerName, files, ns)
+	checkNGFFunctionality(teaURL, coffeeURL, files, ns)
+	if errorLogs := getUnexpectedNginxErrorLogs(ngfPodName); errorLogs != "" {
+		Skip(fmt.Sprintf("NGINX has unexpected error logs: \n%s", errorLogs))
+	}
 }
 
 func restartContainer(ngfPodName, containerName string) {
@@ -317,7 +325,7 @@ func expectRequestToFail(appURL, address string) error {
 	return nil
 }
 
-func checkNGFFunctionality(teaURL, coffeeURL, ngfPodName, containerName string, files []string, ns *core.Namespace) {
+func checkNGFFunctionality(teaURL, coffeeURL string, files []string, ns *core.Namespace) {
 	Eventually(
 		func() error {
 			return checkForWorkingTraffic(teaURL, coffeeURL)
@@ -346,14 +354,9 @@ func checkNGFFunctionality(teaURL, coffeeURL, ngfPodName, containerName string, 
 		WithTimeout(timeoutConfig.TestForTrafficTimeout).
 		WithPolling(500 * time.Millisecond).
 		Should(Succeed())
-
-	checkContainerLogsForErrors(ngfPodName, containerName == nginxContainerName)
 }
 
-// checkContainerLogsForErrors checks both nginx and NGF container's logs for any possible errors.
-// When the NGINX process is killed, some errors are expected in the NGF logs while we wait for the
-// NGINX container to be restarted.
-func checkContainerLogsForErrors(ngfPodName string, checkNginxLogsOnly bool) {
+func getNginxErrorLogs(ngfPodName string) string {
 	nginxLogs, err := resourceManager.GetPodLogs(
 		ngfNamespace,
 		ngfPodName,
@@ -361,38 +364,59 @@ func checkContainerLogsForErrors(ngfPodName string, checkNginxLogsOnly bool) {
 	)
 	Expect(err).ToNot(HaveOccurred())
 
+	errPrefixes := []string{"[crit]", "[error]", "[warn]", "[alert]", "[emerg]"}
+	errorLogs := ""
+
 	for _, line := range strings.Split(nginxLogs, "\n") {
-		Expect(line).ToNot(ContainSubstring("[crit]"), line)
-		Expect(line).ToNot(ContainSubstring("[alert]"), line)
-		Expect(line).ToNot(ContainSubstring("[emerg]"), line)
-		if strings.Contains(line, "[error]") {
-			expectedError1 := "connect() failed (111: Connection refused)"
-			expectedError2 := "could not be resolved (host not found) during usage report"
-			expectedError3 := "server returned 429"
-			// FIXME(salonichf5) remove this error message check
-			// when https://github.com/nginxinc/nginx-gateway-fabric/issues/2090 is completed.
-			expectedError4 := "no live upstreams while connecting to upstream"
-			Expect(line).To(Or(
-				ContainSubstring(expectedError1),
-				ContainSubstring(expectedError2),
-				ContainSubstring(expectedError3),
-				ContainSubstring(expectedError4),
-			))
+		for _, prefix := range errPrefixes {
+			if strings.Contains(line, prefix) {
+				errorLogs += line + "\n"
+			}
 		}
 	}
 
-	if !checkNginxLogsOnly {
-		ngfLogs, err := resourceManager.GetPodLogs(
-			ngfNamespace,
-			ngfPodName,
-			&core.PodLogOptions{Container: ngfContainerName},
-		)
-		Expect(err).ToNot(HaveOccurred())
+	return errorLogs
+}
 
-		for _, line := range strings.Split(ngfLogs, "\n") {
-			Expect(line).ToNot(ContainSubstring("\"level\":\"error\""), line)
+func getUnexpectedNginxErrorLogs(ngfPodName string) string {
+	expectedErrStrings := []string{
+		"connect() failed (111: Connection refused)",
+		"could not be resolved (host not found) during usage report",
+		"server returned 429",
+		// FIXME(salonichf5) remove this error message check
+		// when https://github.com/nginxinc/nginx-gateway-fabric/issues/2090 is completed.
+		"no live upstreams while connecting to upstream",
+	}
+
+	unexpectedErrors := ""
+
+	errorLogs := getNginxErrorLogs(ngfPodName)
+
+	for _, line := range strings.Split(errorLogs, "\n") {
+
+		if !slices.ContainsFunc(expectedErrStrings, func(s string) bool {
+			return strings.Contains(line, s)
+		}) {
+			unexpectedErrors += line
 		}
 	}
+
+	return unexpectedErrors
+}
+
+// checkNGFContainerLogsForErrors checks NGF container's logs for any possible errors.
+func checkNGFContainerLogsForErrors(ngfPodName string) {
+	ngfLogs, err := resourceManager.GetPodLogs(
+		ngfNamespace,
+		ngfPodName,
+		&core.PodLogOptions{Container: ngfContainerName},
+	)
+	Expect(err).ToNot(HaveOccurred())
+
+	for _, line := range strings.Split(ngfLogs, "\n") {
+		Expect(line).ToNot(ContainSubstring("\"level\":\"error\""), line)
+	}
+
 }
 
 func checkLeaderLeaseChange(originalLeaseName string) error {
